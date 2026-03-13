@@ -18,6 +18,7 @@ const App: React.FC = () => {
   const [selectedTraits, setSelectedTraits] = useState<string[]>([]);
   const [isListening, setIsListening] = useState(false);
   const [voiceTranscript, setVoiceTranscript] = useState('');
+  const [isSpeaking, setIsSpeaking] = useState(false);
   const [pdfContent, setPdfContent] = useState({ original: '', modified: '' });
   const [isLoading, setIsLoading] = useState(false);
 
@@ -64,8 +65,33 @@ const App: React.FC = () => {
     }
   };
 
+  // Text-to-speech function
+  const speak = (text: string) => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel(); // Stop any ongoing speech
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.rate = 0.9;
+      utterance.pitch = 1;
+      utterance.volume = 1;
+      
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  // Stop speech synthesis
+  const stopSpeaking = () => {
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+  };
+
   const startVoiceRecognition = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      speak('Speech recognition is not supported in your browser. Please use Chrome or Edge.');
       alert('Speech recognition is not supported in your browser. Please use Chrome or Edge.');
       return;
     }
@@ -79,7 +105,8 @@ const App: React.FC = () => {
 
     recognition.onstart = () => {
       setIsListening(true);
-      setVoiceTranscript('Listening... Say "dyslexia", "ADHD", "autism", or "dyspraxia"');
+      setVoiceTranscript('Listening...');
+      speak('Hello welcome to the smart learning. Tell me what traits you have. You can say dyslexia, ADHD, autism, or dyspraxia.');
     };
 
     recognition.onresult = (event: any) => {
@@ -88,24 +115,44 @@ const App: React.FC = () => {
         .map((result: any) => result.transcript)
         .join('');
       
-      setVoiceTranscript(transcript);
+      setVoiceTranscript(`You said: ${transcript}`);
       
       // Process the transcript for trait selection
       const traits = extractTraitsFromSpeech(transcript.toLowerCase());
       if (traits.length > 0) {
         setSelectedTraits(prev => [...new Set([...prev, ...traits])]);
-        setVoiceTranscript(`Detected traits: ${traits.join(', ')}`);
+        speak(`Great! I've detected ${traits.join(' and ')} for you. Your learning environment will be adapted accordingly.`);
+        setVoiceTranscript(`✅ Detected: ${traits.join(', ')}`);
+      } else {
+        // Check if user is asking for help or clarification
+        if (transcript.toLowerCase().includes('help') || transcript.toLowerCase().includes('what')) {
+          speak('You can tell me about your learning traits. Say dyslexia for reading difficulties, ADHD for attention challenges, autism for structured learning needs, or dyspraxia for motor coordination difficulties.');
+          setVoiceTranscript('Say: dyslexia, ADHD, autism, or dyspraxia');
+        }
       }
     };
 
     recognition.onerror = (event: any) => {
       console.error('Speech recognition error:', event.error);
       setIsListening(false);
-      setVoiceTranscript('Error: ' + event.error);
+      setVoiceTranscript(`Error: ${event.error}`);
+      if (event.error === 'no-speech') {
+        speak("I didn't hear anything. Please try again or click traits manually.");
+      } else {
+        speak('There was an error with voice recognition. Please try again.');
+      }
     };
 
     recognition.onend = () => {
       setIsListening(false);
+      // Auto-restart if no traits were detected and user didn't stop manually
+      if (selectedTraits.length === 0) {
+        setTimeout(() => {
+          if (!isListening) {
+            speak('Would you like to try again? You can also select traits manually by clicking on them.');
+          }
+        }, 2000);
+      }
     };
 
     recognition.start();
@@ -135,14 +182,24 @@ const App: React.FC = () => {
       : [...selectedTraits, trait];
     
     setSelectedTraits(newTraits);
+    
+    // Voice feedback for manual selection
+    if (newTraits.length > selectedTraits.length) {
+      speak(`${trait.charAt(0).toUpperCase() + trait.slice(1)} added to your learning traits.`);
+    } else {
+      speak(`${trait.charAt(0).toUpperCase() + trait.slice(1)} removed from your learning traits.`);
+    }
   };
 
   const confirmTraits = async () => {
     if (selectedTraits.length === 0) {
+      speak('Please select at least one trait using your voice or by clicking on the trait cards.');
       alert('Please select at least one trait or use voice assistant to select traits.');
       return;
     }
 
+    speak(`Perfect! I'm now adapting your learning environment for ${selectedTraits.join(' and ')}.`);
+    
     try {
       const response = await axios.post(`${API_BASE}/select-traits`, {
         sessionId,
@@ -152,8 +209,13 @@ const App: React.FC = () => {
       setSession(prev => prev ? { ...prev, traits: selectedTraits, adaptations: response.data.adaptations } : null);
       applyAdaptations(selectedTraits);
       setCurrentView('main');
+      
+      setTimeout(() => {
+        speak('Your adaptive learning environment is ready! You can now upload PDF documents for personalized content adaptation.');
+      }, 1000);
     } catch (error) {
       console.error('Trait selection error:', error);
+      speak('There was an error setting up your adaptations. Please try again.');
     }
   };
 
@@ -162,6 +224,8 @@ const App: React.FC = () => {
     if (!file) return;
 
     setIsLoading(true);
+    speak('Processing your PDF document. This may take a moment...');
+    
     const formData = new FormData();
     formData.append('pdf', file);
     formData.append('sessionId', sessionId);
@@ -177,8 +241,11 @@ const App: React.FC = () => {
         original: response.data.originalText,
         modified: response.data.modifiedText
       });
+      
+      speak('Perfect! Your PDF has been processed and adapted for your learning traits. You can see the modified content below.');
     } catch (error) {
       console.error('PDF upload error:', error);
+      speak('There was an error processing your PDF. Please try again.');
       alert('Error processing PDF. Please try again.');
     } finally {
       setIsLoading(false);
@@ -219,14 +286,38 @@ const App: React.FC = () => {
         <div className="voice-assistant">
           <h3>Voice Assistant</h3>
           <p>"Hello welcome to the smart learning tell the traits what you have"</p>
-          <button 
-            className="button" 
-            onClick={startVoiceRecognition}
-            disabled={isListening}
-          >
-            {isListening ? 'Listening...' : '🎤 Start Voice Assistant'}
-          </button>
-          {voiceTranscript && <p>{voiceTranscript}</p>}
+          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', flexWrap: 'wrap' }}>
+            <button 
+              className="button" 
+              onClick={startVoiceRecognition}
+              disabled={isListening || isSpeaking}
+            >
+              {isListening ? '🎤 Listening...' : isSpeaking ? '🔊 Speaking...' : '🎤 Start Voice Assistant'}
+            </button>
+            {(isListening || isSpeaking) && (
+              <button 
+                className="button" 
+                onClick={stopSpeaking}
+                style={{ backgroundColor: '#e74c3c' }}
+              >
+                ⏹️ Stop
+              </button>
+            )}
+          </div>
+          {voiceTranscript && (
+            <div style={{ 
+              padding: '10px', 
+              backgroundColor: '#f8f9fa', 
+              borderRadius: '8px',
+              marginTop: '10px',
+              minHeight: '50px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center'
+            }}>
+              <p style={{ margin: 0, textAlign: 'center' }}>{voiceTranscript}</p>
+            </div>
+          )}
         </div>
 
         <h3>Or Select Manually:</h3>
